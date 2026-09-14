@@ -1,0 +1,68 @@
+name: P0 replay validation
+
+on:
+  push:
+    branches: [ci/validate-p0-20260915]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+
+      - name: Validate plugin catalog
+        run: |
+          source .venv/bin/activate
+          python scripts/validate_plugin_catalog.py plugin-catalog/
+
+      - name: Run focused P0 tests
+        run: |
+          source .venv/bin/activate
+          scripts/run_tests.sh \
+            tests/agent/test_memory_data_uri_sanitization.py \
+            tests/agent/test_memory_provider.py \
+            tests/tools/test_skill_manager_tool.py \
+            tests/tools/test_skill_usage.py \
+            tests/tools/test_skills_hub.py
+        env:
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+
+      - name: Run blocking Ruff rules
+        run: |
+          source .venv/bin/activate
+          ruff check \
+            agent/codex_responses_adapter.py \
+            agent/memory_manager.py \
+            tests/agent/test_memory_data_uri_sanitization.py \
+            tools/skill_manager_tool.py \
+            tools/skill_usage.py \
+            tools/skills_hub_install.py \
+            tests/tools/test_skill_manager_tool.py \
+            tests/tools/test_skill_usage.py \
+            tests/tools/test_skills_hub.py
+
+      - name: Verify combined feature diff
+        run: git diff --check HEAD~2...HEAD
