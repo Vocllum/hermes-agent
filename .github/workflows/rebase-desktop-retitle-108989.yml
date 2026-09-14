@@ -1,0 +1,72 @@
+name: Rebuild desktop retitle PR
+
+on:
+  push:
+    branches:
+      - ci/rebase-desktop-retitle-108989
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 1
+
+      - name: Replay feature commits on live upstream main
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name "Vocllum"
+          git config user.email "149675937+Vocllum@users.noreply.github.com"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --depth=1 upstream main
+          base_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --depth=6 origin feat/desktop-regenerate-title
+          mapfile -t commits < <(git rev-list --reverse --max-count=5 FETCH_HEAD)
+          test "${#commits[@]}" -eq 5
+          git checkout -B rebase/desktop-retitle-108989-clean "$base_sha"
+          for commit in "${commits[@]}"; do
+            if ! git cherry-pick "$commit"; then
+              echo 'CONFLICTS:'
+              git diff --name-only --diff-filter=U
+              echo 'COMBINED_DIFF:'
+              git diff --cc --unified=20
+              exit 11
+            fi
+          done
+          git reset --soft "$base_sha"
+          git commit -m "feat(desktop): add regenerate title action"
+          git diff --check "$base_sha"...HEAD
+          git diff --stat "$base_sha"...HEAD
+
+      - name: Set up Node 22.22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run focused Desktop tests
+        working-directory: apps/desktop
+        run: npm test -- --run src/app/chat/actions/retitle-session.test.ts src/app/chat/sidebar/session-actions-menu.test.tsx
+
+      - name: Typecheck Desktop
+        working-directory: apps/desktop
+        run: npm run typecheck
+
+      - name: Lint changed Desktop files
+        working-directory: apps/desktop
+        run: npx eslint --no-warn-ignored src/app/chat/actions/retitle-session.ts src/app/chat/actions/retitle-session.test.ts src/app/chat/sidebar/session-actions-menu.tsx src/i18n/en.ts src/i18n/types.ts src/i18n/zh.ts
+
+      - name: Push clean branch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git diff --check HEAD^...HEAD
+          git push origin HEAD:refs/heads/rebase/desktop-retitle-108989-clean --force
