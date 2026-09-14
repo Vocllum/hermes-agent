@@ -14,14 +14,59 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Replay feature commit on current upstream base
         shell: bash
         run: |
           set -euxo pipefail
           git config user.name "Vocllum"
           git config user.email "149675937+Vocllum@users.noreply.github.com"
-          git fetch origin fix/home-workspace-project-label
+          git fetch --depth=2 origin fix/home-workspace-project-label
           git checkout -B rebase/home-workspace-104101 5eb99eb2844b22ebb723711b8e6a0bbb80bb5f04
+
+          set +e
           git cherry-pick 771474c0a31352a2589b306f68426374ed8372cb
+          cherry_pick_status=$?
+          set -e
+
+          if [ "$cherry_pick_status" -ne 0 ]; then
+            unresolved="$(git diff --name-only --diff-filter=U)"
+            test "$unresolved" = "apps/desktop/src/app/chat/sidebar/projects/overview-row.tsx"
+
+            git checkout --ours -- apps/desktop/src/app/chat/sidebar/projects/overview-row.tsx
+            python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/desktop/src/app/chat/sidebar/projects/overview-row.tsx")
+          text = path.read_text()
+
+          replacements = [
+              (
+                  "  const s = t.sidebar\n  const isActive = project.id === activeProjectId",
+                  "  const s = t.sidebar\n  const projectLabel = project.isNoProject ? s.projects.home : project.label\n  const isActive = project.id === activeProjectId",
+              ),
+              (
+                  "? `${s.projects.enter(project.label)} (${s.projects.autoDiscovered})`\n          : s.projects.enter(project.label)",
+                  "? `${s.projects.enter(projectLabel)} (${s.projects.autoDiscovered})`\n          : s.projects.enter(projectLabel)",
+              ),
+              ("      {project.label}\n    </SidebarRowLink>", "      {projectLabel}\n    </SidebarRowLink>"),
+              ("          {onNewSession && (", "          {onNewSession && (!project.isNoProject || project.isHome) && ("),
+              ("              label={s.newSessionIn(project.label)}", "              label={s.newSessionIn(projectLabel)}"),
+              ("{ cwd: project.path, label: s.newSessionIn(project.label) }", "{ cwd: project.path, label: s.newSessionIn(projectLabel) }"),
+              ("? { ariaLabel: s.projects.toggle(project.label, !open), onToggle: toggleOpen, open }", "? { ariaLabel: s.projects.toggle(projectLabel, !open), onToggle: toggleOpen, open }"),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one match, got {count}: {old!r}")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+            git add apps/desktop/src/app/chat/sidebar/projects/overview-row.tsx
+            git cherry-pick --continue
+          fi
+
+          git diff --check 5eb99eb2844b22ebb723711b8e6a0bbb80bb5f04...HEAD
           git push origin HEAD:refs/heads/rebase/home-workspace-104101 --force
