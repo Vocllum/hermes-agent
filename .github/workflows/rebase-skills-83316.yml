@@ -21,6 +21,7 @@ jobs:
         run: |
           set -euxo pipefail
           cp .ci/rebuild_skills_83316.py /tmp/rebuild_skills_83316.py
+          sed -i 's/"use_count": None,/"use_count": 0,/' /tmp/rebuild_skills_83316.py
           git config user.name "Vocllum"
           git config user.email "149675937+Vocllum@users.noreply.github.com"
           git remote add upstream https://github.com/NousResearch/hermes-agent.git
