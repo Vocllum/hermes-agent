@@ -15,14 +15,18 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 1
-      - name: Replay feature commit on current upstream base
+      - name: Replay feature commit on live upstream main
         shell: bash
         run: |
           set -euxo pipefail
           git config user.name "Vocllum"
           git config user.email "149675937+Vocllum@users.noreply.github.com"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --depth=1 upstream main
+          base_sha="$(git rev-parse FETCH_HEAD)"
+          echo "Replaying onto upstream main: $base_sha"
+          git checkout -B rebase/home-workspace-104101 "$base_sha"
           git fetch --depth=2 origin fix/home-workspace-project-label
-          git checkout -B rebase/home-workspace-104101 5eb99eb2844b22ebb723711b8e6a0bbb80bb5f04
 
           set +e
           git cherry-pick 771474c0a31352a2589b306f68426374ed8372cb
@@ -68,5 +72,5 @@ jobs:
             git cherry-pick --continue
           fi
 
-          git diff --check 5eb99eb2844b22ebb723711b8e6a0bbb80bb5f04...HEAD
+          git diff --check "$base_sha"...HEAD
           git push origin HEAD:refs/heads/rebase/home-workspace-104101 --force
