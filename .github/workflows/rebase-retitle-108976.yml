@@ -39,7 +39,20 @@ jobs:
             exit 11
           fi
 
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/tui_gateway/test_session_retitle_rpc.py")
+          text = path.read_text()
+          old = "    mod._sessions.clear()\n    mod._pending.clear()\n    mod._answers.clear()\n"
+          new = "    mod._sessions.clear()\n"
+          if old not in text:
+              raise SystemExit("expected legacy gateway teardown block not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
           git reset --soft "$base_sha"
+          git add -A
           git commit -m "feat(session): add minimal manual retitle primitive"
           git diff --check "$base_sha"...HEAD
           mapfile -t files < <(git diff --name-only "$base_sha"...HEAD)
