@@ -26,6 +26,7 @@ jobs:
           git remote add upstream https://github.com/NousResearch/hermes-agent.git
           git fetch --depth=1 upstream main
           base_sha="$(git rev-parse FETCH_HEAD)"
+          echo "REPLAY_BASE_SHA=$base_sha" >> "$GITHUB_ENV"
           git fetch --depth=6 origin feat/desktop-regenerate-title
           mapfile -t commits < <(git rev-list --reverse --max-count=5 FETCH_HEAD)
           test "${#commits[@]}" -eq 5
@@ -84,9 +85,11 @@ jobs:
         working-directory: apps/desktop
         run: npx eslint --no-warn-ignored src/app/chat/actions/retitle-session.ts src/app/chat/actions/retitle-session.test.ts src/app/chat/sidebar/session-actions-menu.tsx src/i18n/en.ts src/i18n/types.ts src/i18n/zh.ts
 
-      - name: Push clean branch
+      - name: Push clean branch only if upstream main did not move
         shell: bash
         run: |
           set -euxo pipefail
           git diff --check HEAD^...HEAD
+          git fetch --depth=1 upstream main
+          test "$(git rev-parse FETCH_HEAD)" = "$REPLAY_BASE_SHA"
           git push origin HEAD:refs/heads/rebase/desktop-retitle-108989-clean --force
