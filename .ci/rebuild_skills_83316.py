@@ -1,0 +1,308 @@
+from pathlib import Path
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected exactly one match, got {count}")
+    p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+# tools/skill_usage.py
+replace_once(
+    "tools/skill_usage.py",
+    '''def _emit_skill_lifecycle(skill_name: str, action: str, *, record: Optional[Dict[str, Any]] = None,
+                          task_id: Optional[str] = None, session_id: Optional[str] = None) -> None:
+''',
+    '''def _emit_skill_lifecycle(skill_name: str, action: str, *, record: Optional[Dict[str, Any]] = None,
+                          provenance: Optional[str] = None, task_id: Optional[str] = None,
+                          session_id: Optional[str] = None) -> None:
+''',
+)
+replace_once(
+    "tools/skill_usage.py",
+    '''            invoke_hook("on_skill_lifecycle", action=action, skill_name=skill_name,
+                        provenance=telemetry_provenance(skill_name, record), task_id=task_id or "",
+''',
+    '''            invoke_hook("on_skill_lifecycle", action=action, skill_name=skill_name,
+                        provenance=provenance or telemetry_provenance(skill_name, record), task_id=task_id or "",
+''',
+)
+replace_once(
+    "tools/skill_usage.py",
+    '''def forget(skill_name: str) -> None:
+    if skill_name:
+        _locked_update(skill_name, lambda d: (None, d.pop(skill_name, None) is not None), "skill_usage.forget(%s) failed: %s")
+''',
+    '''def forget(skill_name: str, *, lifecycle_action: Optional[str] = None,
+           provenance: Optional[str] = None, task_id: Optional[str] = None,
+           session_id: Optional[str] = None) -> None:
+    """Drop a usage entry and optionally emit a successful removal lifecycle event.
+
+    Removal callers invoke this only after their authoritative filesystem mutation
+    succeeds. The event still fires if sidecar cleanup cannot commit because that
+    telemetry failure cannot undo a completed delete/uninstall.
+    """
+    if not skill_name:
+        return
+
+    def _drop(data: Dict[str, Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], bool]:
+        raw = data.pop(skill_name, None)
+        return (dict(raw) if isinstance(raw, dict) else None), raw is not None
+
+    prior_record = _locked_update(skill_name, _drop, "skill_usage.forget(%s) failed: %s")
+    if lifecycle_action:
+        _emit_skill_lifecycle(
+            skill_name, lifecycle_action, record=prior_record, provenance=provenance,
+            task_id=task_id, session_id=session_id)
+
+
+def forget_with_lifecycle(skill_name: str, *, lifecycle_action: Optional[str] = None,
+                          provenance: Optional[str] = None, task_id: Optional[str] = None,
+                          session_id: Optional[str] = None, caller_note: str = "") -> None:
+    """Best-effort shared removal wrapper for hard delete and Hub uninstall."""
+    try:
+        forget(skill_name, lifecycle_action=lifecycle_action, provenance=provenance,
+               task_id=task_id, session_id=session_id)
+    except Exception as e:
+        logger.debug("Unable to record %s lifecycle for %s%s: %s", lifecycle_action or "skill", skill_name,
+                     f" ({caller_note})" if caller_note else "", e, exc_info=True)
+''',
+)
+
+# tools/skill_manager_tool.py
+replace_once(
+    "tools/skill_manager_tool.py",
+    '''def _record_success(action, name, result, *, file_path, absorbed_into, task_id,
+                    session_id, ledger_before) -> None:
+''',
+    '''def _record_success(action, name, result, *, file_path, absorbed_into, task_id,
+                    session_id, ledger_before, delete_provenance=None) -> None:
+''',
+)
+replace_once(
+    "tools/skill_manager_tool.py",
+    '''        from tools.skill_usage import bump_patch, forget, record_created
+''',
+    '''        from tools.skill_usage import bump_patch, forget_with_lifecycle, record_created
+''',
+)
+replace_once(
+    "tools/skill_manager_tool.py",
+    '''        elif action == "delete" and not result.get("_archived"):
+            forget(name)
+''',
+    '''        elif action == "delete" and not result.get("_archived"):
+            forget_with_lifecycle(
+                name, lifecycle_action="deleted", provenance=delete_provenance,
+                task_id=task_id, session_id=session_id, caller_note="skill_manage delete")
+''',
+)
+replace_once(
+    "tools/skill_manager_tool.py",
+    '''    handler = _ACTION_HANDLERS.get(action, lambda a: _err(
+        f"Unknown action '{action}'. Use: create, edit, patch, delete, write_file, remove_file"))
+    result = handler({"name": name, **args})
+''',
+    '''    delete_provenance = None
+    if action == "delete":
+        try:
+            from tools.skill_usage import telemetry_provenance
+            delete_provenance = telemetry_provenance(name)
+        except Exception as exc:
+            logger.debug("Unable to capture provenance for %s before delete: %s", name, exc, exc_info=True)
+    handler = _ACTION_HANDLERS.get(action, lambda a: _err(
+        f"Unknown action '{action}'. Use: create, edit, patch, delete, write_file, remove_file"))
+    result = handler({"name": name, **args})
+''',
+)
+replace_once(
+    "tools/skill_manager_tool.py",
+    '''            action, name, result, file_path=file_path, absorbed_into=absorbed_into,
+            task_id=task_id, session_id=session_id, ledger_before=_ledger_before)
+''',
+    '''            action, name, result, file_path=file_path, absorbed_into=absorbed_into,
+            task_id=task_id, session_id=session_id, ledger_before=_ledger_before,
+            delete_provenance=delete_provenance)
+''',
+)
+
+# tools/skills_hub_install.py
+replace_once(
+    "tools/skills_hub_install.py",
+    '''    if install_path.exists():
+        shutil.rmtree(install_path)
+    lock.record_uninstall(skill_name)
+    append_audit_log("UNINSTALL", skill_name, entry["source"], entry["trust_level"], "n/a", "user_request")
+    return True, f"Uninstalled '{skill_name}' from {entry['install_path']}"
+''',
+    '''    uninstall_provenance = None
+    try:
+        from tools.skill_usage import telemetry_provenance
+        uninstall_provenance = telemetry_provenance(skill_name)
+    except Exception as exc:
+        logger.debug("Unable to capture provenance for %s before uninstall: %s", skill_name, exc, exc_info=True)
+    if install_path.exists():
+        shutil.rmtree(install_path)
+    lock.record_uninstall(skill_name)
+    append_audit_log("UNINSTALL", skill_name, entry["source"], entry["trust_level"], "n/a", "user_request")
+    try:
+        from tools.skill_usage import forget_with_lifecycle
+        forget_with_lifecycle(
+            skill_name, lifecycle_action="uninstalled", provenance=uninstall_provenance,
+            caller_note="hub uninstall")
+    except Exception:
+        logger.debug("Unable to record skill uninstall lifecycle for %s", skill_name, exc_info=True)
+    return True, f"Uninstalled '{skill_name}' from {entry['install_path']}"
+''',
+)
+
+# Docs
+replace_once(
+    "website/docs/user-guide/features/hooks.md",
+    '''Fires after an authoritative skill-usage state change. It is observer-only and exposes the local `skill_name`, provenance, correlation IDs, usage count, and reuse flags.
+''',
+    '''Fires after an authoritative skill-usage state change. It is observer-only and exposes the local `skill_name`, provenance, correlation IDs, usage count, and reuse flags.
+
+Successful `skill_manage` hard deletes emit `deleted`, and successful Skills Hub removals emit `uninstalled`. Curator archive/restore keep their existing lifecycle actions. This observer covers Hermes-managed transitions only; it does not watch filesystem changes made directly by editors, Git, sync clients, or other processes.
+''',
+)
+
+# tests/tools/test_skill_usage.py
+replace_once(
+    "tests/tools/test_skill_usage.py",
+    '''def test_forget_removes_record(skills_home):
+    from tools.skill_usage import bump_view, forget, load_usage
+    bump_view("x")
+    assert "x" in load_usage()
+    forget("x")
+    assert "x" not in load_usage()
+
+
+''',
+    '''def test_forget_removes_record(skills_home):
+    from tools.skill_usage import bump_view, forget, load_usage
+    bump_view("x")
+    assert "x" in load_usage()
+    forget("x")
+    assert "x" not in load_usage()
+
+
+def test_forget_can_emit_successful_removal_with_preserved_provenance(skills_home, monkeypatch):
+    from hermes_cli import lifecycle
+    from tools.skill_usage import bump_view, forget, load_usage
+
+    events = []
+    monkeypatch.setattr(lifecycle, "has_hook", lambda _name: True)
+    monkeypatch.setattr(lifecycle, "invoke_hook", lambda name, **kwargs: events.append((name, kwargs)))
+    bump_view("x")
+
+    forget("x", lifecycle_action="deleted", provenance="external",
+           task_id="task-1", session_id="session-1")
+
+    assert "x" not in load_usage()
+    assert events == [("on_skill_lifecycle", {
+        "action": "deleted", "skill_name": "x", "provenance": "external",
+        "task_id": "task-1", "session_id": "session-1", "use_count": None,
+        "reused": None, "reuse_after_patch": None,
+    })]
+
+
+''',
+)
+
+# tests/tools/test_skill_manager_tool.py
+replace_once(
+    "tests/tools/test_skill_manager_tool.py",
+    '''    def test_delete_with_absorbed_into_equals_self_rejected(self, tmp_path):
+        with _skill_dir(tmp_path):
+            _create_skill("narrow", VALID_SKILL_CONTENT)
+            result = _delete_skill("narrow", absorbed_into="narrow")
+        assert result["success"] is False
+        assert "cannot equal" in result["error"]
+        assert (tmp_path / "narrow").exists()
+
+''',
+    '''    def test_delete_with_absorbed_into_equals_self_rejected(self, tmp_path):
+        with _skill_dir(tmp_path):
+            _create_skill("narrow", VALID_SKILL_CONTENT)
+            result = _delete_skill("narrow", absorbed_into="narrow")
+        assert result["success"] is False
+        assert "cannot equal" in result["error"]
+        assert (tmp_path / "narrow").exists()
+
+    def test_successful_hard_delete_reports_lifecycle_event(self, tmp_path):
+        with _skill_dir(tmp_path), \
+             patch("tools.skill_usage.telemetry_provenance", return_value="external"), \
+             patch("tools.skill_usage.forget_with_lifecycle") as forget:
+            _create_skill("my-skill", VALID_SKILL_CONTENT)
+            result = json.loads(skill_manage(
+                action="delete", name="my-skill", task_id="task-1", session_id="session-1"))
+
+        assert result["success"] is True
+        forget.assert_called_once_with(
+            "my-skill", lifecycle_action="deleted", provenance="external",
+            task_id="task-1", session_id="session-1", caller_note="skill_manage delete")
+
+    def test_failed_delete_does_not_report_lifecycle_event(self, tmp_path):
+        with _skill_dir(tmp_path), patch("tools.skill_usage.forget_with_lifecycle") as forget:
+            result = json.loads(skill_manage(action="delete", name="missing-skill"))
+
+        assert result["success"] is False
+        forget.assert_not_called()
+
+    def test_curator_archive_does_not_report_deleted(self, tmp_path):
+        with _skill_dir(tmp_path), \
+             patch("tools.skill_manager_tool._delete_skill", return_value={
+                 "success": True, "message": "Skill archived.", "_archived": True,
+             }), \
+             patch("tools.skill_usage.forget_with_lifecycle") as forget:
+            result = json.loads(skill_manage(
+                action="delete", name="archived-skill", absorbed_into="umbrella"))
+
+        assert result["success"] is True
+        forget.assert_not_called()
+
+''',
+)
+
+# tests/tools/test_skills_hub.py
+replace_once(
+    "tests/tools/test_skills_hub.py",
+    '''
+
+    def test_install_from_quarantine_rejects_symlinks(self, tmp_path):
+''',
+    '''
+
+    def test_successful_uninstall_reports_lifecycle_event(
+        self, tmp_path, isolated_skills_dir, patch_lock_file,
+    ):
+        from tools.skills_hub_install import uninstall_skill
+
+        skill_dir = isolated_skills_dir / "hub-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# Hub skill\\n")
+        lock_path = tmp_path / "lock.json"
+        patch_lock_file(lock_path)
+        HubLockFile().record_install(
+            name="hub-skill", source="github", identifier="owner/repo/hub-skill",
+            trust_level="trusted", scan_verdict="pass", skill_hash="hash",
+            install_path="hub-skill", files=["SKILL.md"],
+        )
+
+        with patch("tools.skill_usage.telemetry_provenance", return_value="installed"), \
+             patch("tools.skill_usage.forget_with_lifecycle") as forget:
+            ok, _ = uninstall_skill("hub-skill")
+
+        assert ok is True
+        assert not skill_dir.exists()
+        forget.assert_called_once_with(
+            "hub-skill", lifecycle_action="uninstalled", provenance="installed",
+            caller_note="hub uninstall")
+
+    def test_install_from_quarantine_rejects_symlinks(self, tmp_path):
+''',
+)
