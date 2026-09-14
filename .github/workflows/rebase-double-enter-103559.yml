@@ -71,13 +71,28 @@ jobs:
           npx eslint --no-warn-ignored "${rel[@]}"
           npx prettier --check "${rel[@]}"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install Python dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+
       - name: Validate changed Python config files
         shell: bash
         run: |
           set -euxo pipefail
           source .venv/bin/activate
           mapfile -t pyfiles < <(git diff --name-only "$REPLAY_BASE_SHA"...HEAD | grep -E '\.py$' || true)
-          test "${#pyfiles[@]}" -gt 0
+          test "${#pyfiles[@]}" -eq 2
           ruff check "${pyfiles[@]}"
           python - <<'PY'
           from hermes_cli.config_defaults import DEFAULT_CONFIG
