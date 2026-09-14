@@ -54,6 +54,24 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Apply repository ESLint fixes to changed Desktop files
+        working-directory: apps/desktop
+        run: |
+          npx eslint --fix --no-warn-ignored \
+            src/app/chat/actions/retitle-session.ts \
+            src/app/chat/actions/retitle-session.test.ts \
+            src/app/chat/sidebar/session-actions-menu.tsx \
+            src/i18n/en.ts \
+            src/i18n/types.ts \
+            src/i18n/zh.ts
+          git add src/app/chat/actions/retitle-session.ts \
+            src/app/chat/actions/retitle-session.test.ts \
+            src/app/chat/sidebar/session-actions-menu.tsx \
+            src/i18n/en.ts \
+            src/i18n/types.ts \
+            src/i18n/zh.ts
+          git commit --amend --no-edit
+
       - name: Run focused Desktop tests
         working-directory: apps/desktop
         run: npm test -- --run src/app/chat/actions/retitle-session.test.ts src/app/chat/sidebar/session-actions-menu.test.tsx
