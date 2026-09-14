@@ -1,0 +1,51 @@
+name: Memory data URI validation
+
+on:
+  push:
+    branches: [ci/validate-memory-data-uri-110512]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+
+      - name: Run focused tests
+        run: |
+          source .venv/bin/activate
+          scripts/run_tests.sh \
+            tests/agent/test_memory_data_uri_sanitization.py \
+            tests/agent/test_memory_provider.py \
+            tests/run_agent/test_run_agent_multimodal_prologue.py
+        env:
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+
+      - name: Run blocking Ruff rules on touched Python files
+        run: |
+          source .venv/bin/activate
+          ruff check \
+            agent/codex_responses_adapter.py \
+            agent/memory_manager.py \
+            tests/agent/test_memory_data_uri_sanitization.py \
+            tests/agent/test_memory_provider.py
