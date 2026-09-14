@@ -141,8 +141,7 @@ def inject_memory_provider_tools(agent: Any) -> int:
         return 0
 
     get_schemas = getattr(memory_manager, "get_all_tool_schemas", None)
-    tools = getattr(agent, "tools", None)
-    if not callable(get_schemas) or tools is None:
+    if not callable(get_schemas):
         return 0
 
     if getattr(agent, "valid_tool_names", None) is None:
