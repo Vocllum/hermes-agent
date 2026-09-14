@@ -1,0 +1,41 @@
+name: Rebase skills index PR
+
+on:
+  push:
+    branches:
+      - ci/rebase-skills-83314
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 1
+      - name: Replay feature commits on live upstream main
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name "Vocllum"
+          git config user.email "149675937+Vocllum@users.noreply.github.com"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --depth=1 upstream main
+          base_sha="$(git rev-parse FETCH_HEAD)"
+          echo "Replaying onto upstream main: $base_sha"
+          git checkout -B rebase/skills-83314-clean "$base_sha"
+          git fetch origin 571e73611a9267069fd21b7353f58380a6dea8b5 6555e5af7d4a285be15d85ac0ecf948cd17f9750
+          git cherry-pick 571e73611a9267069fd21b7353f58380a6dea8b5 || {
+            echo 'FIRST_COMMIT_CONFLICTS:'
+            git diff --name-only --diff-filter=U
+            exit 11
+          }
+          git cherry-pick 6555e5af7d4a285be15d85ac0ecf948cd17f9750 || {
+            echo 'SECOND_COMMIT_CONFLICTS:'
+            git diff --name-only --diff-filter=U
+            exit 12
+          }
+          git diff --check "$base_sha"...HEAD
+          git push origin HEAD:refs/heads/rebase/skills-83314-clean --force
