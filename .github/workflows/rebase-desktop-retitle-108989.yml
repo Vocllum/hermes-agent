@@ -20,6 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          cp .ci/adapt_desktop_retitle_108989.py /tmp/adapt_desktop_retitle_108989.py
           git config user.name "Vocllum"
           git config user.email "149675937+Vocllum@users.noreply.github.com"
           git remote add upstream https://github.com/NousResearch/hermes-agent.git
@@ -38,6 +39,7 @@ jobs:
               exit 11
             fi
           done
+          python /tmp/adapt_desktop_retitle_108989.py
           git reset --soft "$base_sha"
           git commit -m "feat(desktop): add regenerate title action"
           git diff --check "$base_sha"...HEAD
