@@ -1,38 +1,36 @@
 from pathlib import Path
 
 
-def replace_once(path: str, old: str, new: str) -> None:
+def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
     p = Path(path)
     text = p.read_text(encoding="utf-8")
     count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected exactly one match, got {count}")
-    p.write_text(text.replace(old, new, 1), encoding="utf-8")
+    if count != expected:
+        raise SystemExit(f"{path}: expected {expected} matches, got {count}")
+    p.write_text(text.replace(old, new), encoding="utf-8")
 
 
 source = "apps/desktop/src/app/chat/actions/retitle-session.ts"
-replace_once(source, "  const t = translateNow()\n", "")
-for key in (
-    "regenerateTitleFailed",
-    "regeneratingTitle",
-    "regenerateTitleSuccess",
-):
-    replace_once(
-        source,
-        f"t.sidebar.row.{key}",
-        f"translateNow('sidebar.row.{key}')",
-    )
-
-# regenerateTitleFailed appears twice in the source; the first loop replaces only
-# one occurrence, so update the second explicitly.
-replace_once(
+replace_exact(source, "  const t = translateNow()\n", "")
+replace_exact(
     source,
     "t.sidebar.row.regenerateTitleFailed",
     "translateNow('sidebar.row.regenerateTitleFailed')",
+    expected=2,
+)
+replace_exact(
+    source,
+    "t.sidebar.row.regeneratingTitle",
+    "translateNow('sidebar.row.regeneratingTitle')",
+)
+replace_exact(
+    source,
+    "t.sidebar.row.regenerateTitleSuccess",
+    "translateNow('sidebar.row.regenerateTitleSuccess')",
 )
 
 test = "apps/desktop/src/app/chat/actions/retitle-session.test.ts"
-replace_once(
+replace_exact(
     test,
     '''vi.mock('@/i18n', () => ({
   translateNow: () => ({
