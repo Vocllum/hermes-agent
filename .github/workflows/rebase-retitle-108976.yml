@@ -11,12 +11,13 @@ permissions:
 jobs:
   rebuild:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 1
 
-      - name: Replay feature commits on live upstream main
+      - name: Replay feature on live upstream main
         shell: bash
         run: |
           set -euxo pipefail
@@ -25,24 +26,29 @@ jobs:
           git remote add upstream https://github.com/NousResearch/hermes-agent.git
           git fetch --depth=1 upstream main
           base_sha="$(git rev-parse FETCH_HEAD)"
-          git fetch --depth=8 origin feat/manual-session-retitle
-          mapfile -t commits < <(git rev-list --reverse --max-count=7 FETCH_HEAD)
-          test "${#commits[@]}" -eq 7
-          printf 'feature commits:\n%s\n' "${commits[@]}"
+          echo "REPLAY_BASE_SHA=$base_sha" >> "$GITHUB_ENV"
+
+          git fetch --depth=2 origin feat/manual-session-retitle
+          feature_sha="$(git rev-parse FETCH_HEAD)"
           git checkout -B rebase/manual-retitle-108976-clean "$base_sha"
-          for commit in "${commits[@]}"; do
-            if ! git cherry-pick "$commit"; then
-              echo 'CONFLICTS:'
-              git diff --name-only --diff-filter=U
-              echo 'COMBINED_DIFF:'
-              git diff --cc --unified=20
-              exit 11
-            fi
-          done
+          if ! git cherry-pick "$feature_sha"; then
+            echo 'CONFLICTS:'
+            git diff --name-only --diff-filter=U
+            echo 'COMBINED_DIFF:'
+            git diff --cc --unified=20
+            exit 11
+          fi
+
           git reset --soft "$base_sha"
           git commit -m "feat(session): add minimal manual retitle primitive"
           git diff --check "$base_sha"...HEAD
-          git diff --stat "$base_sha"...HEAD
+          mapfile -t files < <(git diff --name-only "$base_sha"...HEAD)
+          test "${#files[@]}" -eq 4
+          printf '%s\n' "${files[@]}" | diff -u <(printf '%s\n' \
+            agent/session_retitle.py \
+            tests/agent/test_session_retitle.py \
+            tests/tui_gateway/test_session_retitle_rpc.py \
+            tui_gateway/methods_session_control.py) -
 
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
@@ -63,7 +69,7 @@ jobs:
         shell: bash
         run: |
           source .venv/bin/activate
-          pytest -q \
+          scripts/run_tests.sh \
             tests/agent/test_session_retitle.py \
             tests/tui_gateway/test_session_retitle_rpc.py \
             tests/agent/test_title_generator.py
@@ -78,9 +84,11 @@ jobs:
             tests/agent/test_session_retitle.py \
             tests/tui_gateway/test_session_retitle_rpc.py
 
-      - name: Push clean branch
+      - name: Push clean branch only if upstream main did not move
         shell: bash
         run: |
           set -euxo pipefail
           git diff --check HEAD^...HEAD
+          git fetch --depth=1 upstream main
+          test "$(git rev-parse FETCH_HEAD)" = "$REPLAY_BASE_SHA"
           git push origin HEAD:refs/heads/rebase/manual-retitle-108976-clean --force
