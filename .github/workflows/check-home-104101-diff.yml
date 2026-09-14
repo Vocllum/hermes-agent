@@ -1,0 +1,19 @@
+name: Check home workspace diff
+
+on:
+  push:
+    branches:
+      - ci/check-home-104101-diff
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 3
+      - name: Check feature diff whitespace
+        run: git diff --check HEAD~2 HEAD~1
