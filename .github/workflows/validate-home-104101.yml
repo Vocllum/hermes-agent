@@ -1,0 +1,65 @@
+name: Validate home workspace PR
+
+on:
+  push:
+    branches:
+      - ci/validate-home-104101
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: 0.9.28
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install Python dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Run backend project tests
+        run: |
+          source .venv/bin/activate
+          pytest tests/tui_gateway/test_project_tree.py tests/tui_gateway/test_projects_rpc.py -q
+
+      - name: Set up Node 22.22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run focused Desktop tests
+        working-directory: apps/desktop
+        run: npm test -- --run src/store/projects.test.ts src/app/chat/sidebar/projects/workspace-groups.test.ts src/app/chat/sidebar/session-actions-menu.test.tsx
+
+      - name: Typecheck Desktop
+        working-directory: apps/desktop
+        run: npm run typecheck
+
+      - name: Build Desktop
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Lint Desktop
+        working-directory: apps/desktop
+        run: npm run lint -- --no-warn-ignored
+
+      - name: Check feature diff whitespace
+        run: git diff --check c59f645b2e32f0e74d266966f8fb2f56f39aa704^ c59f645b2e32f0e74d266966f8fb2f56f39aa704
