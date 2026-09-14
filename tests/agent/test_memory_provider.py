@@ -899,6 +899,44 @@ class TestFlattenMessageContent:
         # Must not raise.
         assert sanitize_context(_summarize_user_message_for_log(content, sep="\n"))
 
+    def test_summarize_strips_base64_data_uris(self):
+        """Base64 data URIs must be stripped from string or list content to avoid bloating memories/logs."""
+        from agent.codex_responses_adapter import _summarize_user_message_for_log
+        b64 = "iVBORw0KGgoAAAANSUhEUgAA" * 100
+        raw_str = f'check this image: data:image/png;base64,{b64} please'
+        assert _summarize_user_message_for_log(raw_str) == "check this image: [embedded data] please"
+
+        content = [
+            {"type": "text", "text": f"inline: data:image/jpeg;base64,{b64} done"},
+        ]
+        assert _summarize_user_message_for_log(content) == "inline: [embedded data] done"
+
+    def test_memory_manager_sync_all_strips_data_uris(self):
+        """MemoryManager.sync_all strips data URIs before passing to providers."""
+        from agent.memory_manager import MemoryManager
+        recorded = []
+
+        class RecordingProvider(FakeMemoryProvider):
+            def sync_turn(self, user_content, assistant_content, **kwargs):
+                recorded.append((user_content, assistant_content))
+
+        mgr = MemoryManager()
+        p = RecordingProvider()
+        mgr.add_provider(p)
+
+        b64 = "iVBORw0KGgoAAAANSUhEUgAA" * 50
+        user_msg = f"User asked with data:image/png;base64,{b64} here"
+        asst_msg = f"Assistant replied with data:image/png;base64,{b64} here"
+        mgr.sync_all(user_msg, asst_msg)
+        mgr.shutdown_all()
+
+        assert len(recorded) == 1
+        u, a = recorded[0]
+        assert "data:image" not in u
+        assert "[embedded data]" in u
+        assert "data:image" not in a
+        assert "[embedded data]" in a
+
 
 # ---------------------------------------------------------------------------
 # AIAgent.commit_memory_session — routes to MemoryManager.on_session_end

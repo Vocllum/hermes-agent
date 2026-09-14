@@ -285,6 +285,16 @@ def build_memory_context_block(raw_context: str) -> str:
     )
 
 
+_DATA_URI_RE = re.compile(r"data:[a-zA-Z0-9.+-]+/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+")
+
+
+def _strip_data_uris(text: str) -> str:
+    """Strip base64 data URIs from text to prevent bloating logs, trajectories, and memories."""
+    if not isinstance(text, str) or "data:" not in text:
+        return text if isinstance(text, str) else ""
+    return _DATA_URI_RE.sub("[embedded data]", text)
+
+
 class MemoryManager:
     """Builtin provider (always first) plus at most one external provider.
 
@@ -474,7 +484,8 @@ class MemoryManager:
         open after the user saw the response. The single worker also serializes writes (turn N before N+1).
         """
         providers = list(self._providers)
-        clean_user_content = self._strip_skill_scaffolding(user_content) if providers else None
+        clean_user_content = _strip_data_uris(self._strip_skill_scaffolding(user_content)) if providers else None
+        clean_assistant_content = _strip_data_uris(assistant_content) if providers else ""
         if not clean_user_content:
             return
 
@@ -482,7 +493,7 @@ class MemoryManager:
             kwargs: Dict[str, Any] = {"session_id": session_id}
             if messages is not None and self._provider_sync_accepts_messages(provider):
                 kwargs["messages"] = messages
-            provider.sync_turn(clean_user_content, assistant_content, **kwargs)
+            provider.sync_turn(clean_user_content, clean_assistant_content, **kwargs)
 
         self._submit_background(
             lambda: self._each_provider("sync_turn failed", _sync, level=logging.WARNING, providers=providers)
