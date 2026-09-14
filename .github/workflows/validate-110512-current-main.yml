@@ -1,0 +1,52 @@
+name: Validate 110512 current main
+
+on:
+  push:
+    branches: ["validate/110512-current-main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install locked dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+
+      - name: Focused tests
+        run: |
+          source .venv/bin/activate
+          scripts/run_tests.sh \
+            tests/agent/test_memory_data_uri_sanitization.py \
+            tests/agent/test_memory_provider.py \
+            tests/run_agent/test_run_agent_multimodal_prologue.py
+        env:
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+
+      - name: Ruff
+        run: |
+          source .venv/bin/activate
+          ruff check \
+            agent/codex_responses_adapter.py \
+            agent/memory_manager.py \
+            tests/agent/test_memory_data_uri_sanitization.py
