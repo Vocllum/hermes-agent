@@ -385,9 +385,27 @@ def _build_project_tree(
     git_probe.warm_roots(
         [str(f.get("path") or "") for p in projects for f in (p.get("folders") or [])]
         + [str(r.get("root") or "") for r in discovered])
+    configured_root = ""
+    with contextlib.suppress(Exception):
+        from hermes_constants import get_hermes_home
+        configured = _profile_configured_cwd(Path(get_hermes_home()))
+        if configured:
+            configured_root = os.path.normcase(os.path.realpath(configured))
+
+    # The configured default workspace is represented by the synthetic, pathless Home
+    # bucket. Reuse build_tree's existing junk-policy hooks so ONLY that exact root is
+    # prevented from becoming an auto/discovered project; nested repos remain distinct.
+    def _home_owns_root(value: str) -> bool:
+        return bool(
+            configured_root
+            and os.path.normcase(os.path.realpath(value)) == configured_root
+        )
+
     tree = project_tree.build_tree(
         projects, sessions, discovered, git_probe.resolve, preview_limit=preview_limit,
-        hydrate=hydrate, is_junk_root=_is_repo_junk, is_junk_cwd=_is_session_cwd_junk,
+        hydrate=hydrate,
+        is_junk_root=lambda root: _is_repo_junk(root) or _home_owns_root(root),
+        is_junk_cwd=lambda cwd: _is_session_cwd_junk(cwd) or _home_owns_root(cwd),
         exists=_dir_exists_cached)
     return tree, active_id
 
