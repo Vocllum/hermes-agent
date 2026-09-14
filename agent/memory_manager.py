@@ -141,7 +141,8 @@ def inject_memory_provider_tools(agent: Any) -> int:
         return 0
 
     get_schemas = getattr(memory_manager, "get_all_tool_schemas", None)
-    if not callable(get_schemas):
+    tools = getattr(agent, "tools", None)
+    if not callable(get_schemas) or tools is None:
         return 0
 
     if getattr(agent, "valid_tool_names", None) is None:
@@ -293,6 +294,19 @@ def _strip_data_uris(text: str) -> str:
     if not isinstance(text, str) or "data:" not in text:
         return text if isinstance(text, str) else ""
     return _DATA_URI_RE.sub("[embedded data]", text)
+
+
+def _strip_data_uris_from_value(value: Any) -> Any:
+    """Copy JSON-like provider input while replacing data URIs in every nested string value."""
+    if isinstance(value, str):
+        return _strip_data_uris(value)
+    if isinstance(value, list):
+        return [_strip_data_uris_from_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_data_uris_from_value(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _strip_data_uris_from_value(item) for key, item in value.items()}
+    return value
 
 
 class MemoryManager:
@@ -486,13 +500,14 @@ class MemoryManager:
         providers = list(self._providers)
         clean_user_content = _strip_data_uris(self._strip_skill_scaffolding(user_content)) if providers else None
         clean_assistant_content = _strip_data_uris(assistant_content) if providers else ""
+        clean_messages = _strip_data_uris_from_value(messages) if messages is not None else None
         if not clean_user_content:
             return
 
         def _sync(provider: MemoryProvider) -> None:
             kwargs: Dict[str, Any] = {"session_id": session_id}
-            if messages is not None and self._provider_sync_accepts_messages(provider):
-                kwargs["messages"] = messages
+            if clean_messages is not None and self._provider_sync_accepts_messages(provider):
+                kwargs["messages"] = clean_messages
             provider.sync_turn(clean_user_content, clean_assistant_content, **kwargs)
 
         self._submit_background(
@@ -598,7 +613,8 @@ class MemoryManager:
         self._each_provider("on_turn_start failed", lambda p: p.on_turn_start(turn_number, message, **kwargs))
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
-        self._each_provider("on_session_end failed", lambda p: p.on_session_end(messages), level=logging.WARNING,
+        clean_messages = _strip_data_uris_from_value(messages)
+        self._each_provider("on_session_end failed", lambda p: p.on_session_end(clean_messages), level=logging.WARNING,
                             exc_info=True)
 
     def commit_session_boundary_async(self, messages: List[Dict[str, Any]], *, new_session_id: str,
@@ -672,13 +688,17 @@ class MemoryManager:
         """
         parts = []
         checkpoint_succeeded = False
+        clean_messages = _strip_data_uris_from_value(messages)
+        clean_evidence_messages = (
+            _strip_data_uris_from_value(evidence_messages) if evidence_messages is not None else None
+        )
         for provider in self._providers:
             version = self._checkpoint_api_version(provider)
             if version is None:
                 version = _LEGACY_PRE_COMPRESS_API_VERSION
             is_checkpoint_provider = version >= checkpoint_api_version
-            use_evidence = is_checkpoint_provider and evidence_messages is not None
-            provider_messages = evidence_messages if use_evidence else messages
+            use_evidence = is_checkpoint_provider and clean_evidence_messages is not None
+            provider_messages = clean_evidence_messages if use_evidence else clean_messages
             kwargs: Dict[str, Any] = {}
             # v1 providers and bare-shape v2 providers never see the signal.
             if is_checkpoint_provider and _accepts_require_checkpoint(provider.on_pre_compress):
