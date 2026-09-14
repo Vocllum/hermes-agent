@@ -1,0 +1,76 @@
+name: Validate auto titler catalog PR
+
+on:
+  push:
+    branches: [ci/validate-auto-titler-108959]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 1
+
+      - name: Replay catalog entry on live upstream main
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name "Vocllum"
+          git config user.email "149675937+Vocllum@users.noreply.github.com"
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --depth=1 upstream main
+          base_sha="$(git rev-parse FETCH_HEAD)"
+          echo "REPLAY_BASE_SHA=$base_sha" >> "$GITHUB_ENV"
+
+          git fetch --depth=2 origin catalog/add-hermes-auto-titler
+          feature_sha="$(git rev-parse FETCH_HEAD)"
+          git checkout -B rebase/108959-clean "$base_sha"
+          git cherry-pick "$feature_sha"
+          git reset --soft "$base_sha"
+          git commit -m "feat(plugin-catalog): add hermes-auto-titler"
+
+          git diff --check "$base_sha"...HEAD
+          test "$(git diff --name-only "$base_sha"...HEAD | wc -l)" -eq 1
+          test "$(git diff --name-only "$base_sha"...HEAD)" = "plugin-catalog/hermes-auto-titler.yaml"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Validate catalog structure
+        run: |
+          source .venv/bin/activate
+          python scripts/validate_plugin_catalog.py plugin-catalog/
+
+      - name: Validate pinned plugin capabilities against current Hermes
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/Vocllum/hermes-auto-titler.git /tmp/hermes-auto-titler
+          git -C /tmp/hermes-auto-titler checkout 307993c36e261af2769e486befc6841e96f93423
+          .venv/bin/hermes plugins validate /tmp/hermes-auto-titler --json
+
+      - name: Push clean branch only if upstream main did not move
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git diff --check HEAD^...HEAD
+          git fetch --depth=1 upstream main
+          test "$(git rev-parse FETCH_HEAD)" = "$REPLAY_BASE_SHA"
+          git push origin HEAD:refs/heads/rebase/108959-clean --force
