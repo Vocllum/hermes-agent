@@ -27,15 +27,23 @@ jobs:
           echo "Replaying onto upstream main: $base_sha"
           git checkout -B rebase/skills-83316-clean "$base_sha"
           git fetch origin 2b8311a3f95873b83b43624c0d271cf244ee1025 ca1a4d084f0bd37a740238adae7c7371a0b2a948
-          git cherry-pick 2b8311a3f95873b83b43624c0d271cf244ee1025 || {
+          if ! git cherry-pick 2b8311a3f95873b83b43624c0d271cf244ee1025; then
             echo 'FIRST_COMMIT_CONFLICTS:'
             git diff --name-only --diff-filter=U
+            echo 'FIRST_COMMIT_COMBINED_DIFF:'
+            git diff --cc --unified=18 -- \
+              tools/skill_manager_tool.py \
+              tools/skill_usage.py \
+              tools/skills_hub.py \
+              website/docs/user-guide/features/hooks.md
             exit 11
-          }
-          git cherry-pick ca1a4d084f0bd37a740238adae7c7371a0b2a948 || {
+          fi
+          if ! git cherry-pick ca1a4d084f0bd37a740238adae7c7371a0b2a948; then
             echo 'SECOND_COMMIT_CONFLICTS:'
             git diff --name-only --diff-filter=U
+            echo 'SECOND_COMMIT_COMBINED_DIFF:'
+            git diff --cc --unified=18
             exit 12
-          }
+          fi
           git diff --check "$base_sha"...HEAD
           git push origin HEAD:refs/heads/rebase/skills-83316-clean --force
