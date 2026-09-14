@@ -1,0 +1,27 @@
+name: Rebase home workspace PR
+
+on:
+  push:
+    branches:
+      - ci/rebase-home-104101
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - name: Replay feature commit on current upstream base
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name "Vocllum"
+          git config user.email "149675937+Vocllum@users.noreply.github.com"
+          git fetch origin fix/home-workspace-project-label
+          git checkout -B rebase/home-workspace-104101 5eb99eb2844b22ebb723711b8e6a0bbb80bb5f04
+          git cherry-pick 771474c0a31352a2589b306f68426374ed8372cb
+          git push origin HEAD:refs/heads/rebase/home-workspace-104101 --force
