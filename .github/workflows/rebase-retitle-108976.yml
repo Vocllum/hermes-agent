@@ -84,11 +84,14 @@ jobs:
             tests/agent/test_session_retitle.py \
             tests/tui_gateway/test_session_retitle_rpc.py
 
-      - name: Push clean branch only if upstream main did not move
+      - name: Publish validated head only if upstream main did not move
         shell: bash
         run: |
           set -euxo pipefail
           git diff --check HEAD^...HEAD
           git fetch --depth=1 upstream main
           test "$(git rev-parse FETCH_HEAD)" = "$REPLAY_BASE_SHA"
-          git push origin HEAD:refs/heads/rebase/manual-retitle-108976-clean --force
+          git push origin \
+            HEAD:refs/heads/rebase/manual-retitle-108976-clean \
+            HEAD:refs/heads/feat/manual-session-retitle \
+            --force
