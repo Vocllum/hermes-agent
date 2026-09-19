@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 _LOCAL_MODES = {"local", "local_embedded"}
 _RETAIN_CONTEXT_DEFAULT = "conversation between Hermes Agent and the User"
+_RETAIN_CONTEXT_IDENTITY_TEMPLATE = "conversation between {agent_name} (AI agent) and the User"
 
 
 def _ensure_client_dependency() -> None:
@@ -409,6 +410,7 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "llm_model", "description": "LLM model", "default": "gpt-4o-mini", "default_from": {"field": "llm_provider", "map": _PROVIDER_DEFAULT_MODELS}, "when": {"mode": "local_embedded"}},
             {"key": "bank_id", "description": "Memory bank name (static fallback when bank_id_template is unset)", "default": "hermes"},
             {"key": "bank_id_template", "description": "Optional template to derive bank_id dynamically. Placeholders: {profile}, {workspace}, {platform}, {user}, {session}. Example: hermes-{profile}", "default": ""},
+            {"key": "profile_alias", "description": "Display alias for the default profile (e.g. 'lynn')", "default": ""},
             {"key": "bank_mission", "description": "Mission/purpose description for the memory bank"},
             {"key": "bank_retain_mission", "description": "Custom extraction prompt for memory retention"},
             {"key": "recall_budget", "description": "Recall thoroughness", "default": "mid", "choices": ["low", "mid", "high"]},
@@ -664,6 +666,18 @@ class HindsightMemoryProvider(MemoryProvider):
         self._config = cfg = _load_config()
         for name in _SESSION_KWARGS:
             setattr(self, f"_{name}", str(kwargs.get(name) or "").strip())
+        # Resolve profile alias: only alias "default" to the configured alias or profile display_name
+        profile_alias = str(cfg.get("profile_alias") or "").strip()
+        if not profile_alias:
+            profile_yaml = get_hermes_home() / "profile.yaml"
+            if profile_yaml.is_file():
+                with contextlib.suppress(Exception):
+                    import yaml
+                    pdata = yaml.safe_load(profile_yaml.read_text(encoding="utf-8"))
+                    if isinstance(pdata, dict) and pdata.get("display_name"):
+                        profile_alias = str(pdata["display_name"]).strip()
+        if self._agent_identity == "default" and profile_alias:
+            self._agent_identity = profile_alias
         self._turn_index = self._last_retained_turn_count = 0
         self._session_turns = []
         self._mode = cfg.get("mode", "cloud")
@@ -826,6 +840,32 @@ class HindsightMemoryProvider(MemoryProvider):
         except Exception as e:
             _log(f"\n=== Daemon startup failed: {e} ===\n" + traceback.format_exc())
 
+    def _effective_retain_context(self, explicit_context: str | None = None) -> str:
+        """Return the retain context enriched with agent identity when available.
+
+        Hindsight's fact extraction reads the item ``context`` field to
+        attribute first-person statements (the ``agent_name`` API parameter is
+        deprecated in favour of describing the speaker in ``context``).
+
+        When the user configured a custom ``retain_context`` it is used as-is.
+        Otherwise, if ``_agent_identity`` is set (from profile alias /
+        display_name / initialize kwargs) and differs from the generic
+        "default", the default context template is personalised with the agent
+        name so extraction attributes "I did X" to the correct identity rather
+        than a generic "assistant".
+
+        *explicit_context* (from a tool call's ``context`` arg) wins outright.
+        """
+        if explicit_context:
+            return explicit_context
+        # User-configured retain_context overrides identity templating.
+        if self._retain_context != _RETAIN_CONTEXT_DEFAULT:
+            return self._retain_context
+        identity = self._agent_identity
+        if identity and identity != "default":
+            return _RETAIN_CONTEXT_IDENTITY_TEMPLATE.format(agent_name=identity)
+        return self._retain_context
+
     def system_prompt_block(self) -> str:
         mode = self._memory_mode if self._memory_mode in _SYSTEM_PROMPT_TAILS else "hybrid"
         label = "" if mode == "hybrid" else f" ({mode} mode)"
@@ -984,7 +1024,7 @@ class HindsightMemoryProvider(MemoryProvider):
         metadata = self._build_metadata(message_count=len(turns) * 2, turn_index=self._turn_index)
         lineage = (("session", self._session_id), ("parent", self._parent_session_id))
         tags = [f"{kind}:{sid}" for kind, sid in lineage if sid] or None
-        bank_id, retain_async, retain_context = self._bank_id, self._retain_async, self._retain_context
+        bank_id, retain_async, retain_context = self._bank_id, self._retain_async, self._effective_retain_context()
 
         def _job() -> None:
             item = self._build_retain_kwargs(content, context=retain_context, metadata=metadata,
@@ -1056,7 +1096,8 @@ class HindsightMemoryProvider(MemoryProvider):
 
     def _tool_retain(self, args: dict) -> str:
         content, context = args["content"], args.get("context")
-        item = self._build_retain_kwargs(content, context=context, tags=args.get("tags"),
+        item = self._build_retain_kwargs(content, context=self._effective_retain_context(context),
+                                         tags=args.get("tags"),
                                          occurred_at=args.get("occurred_at"))
         logger.debug("Tool hindsight_retain: bank=%s, content_len=%d, context=%s",
                      self._bank_id, len(content), context)

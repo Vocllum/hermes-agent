@@ -924,7 +924,7 @@ class TestSyncTurn:
         assert call_kwargs["retain_async"] is True
         assert len(call_kwargs["items"]) == 1
         item = call_kwargs["items"][0]
-        assert item["context"] == "conversation between Hermes Agent and the User"
+        assert item["context"] == "conversation between fakeassistantname (AI agent) and the User"
         assert item["tags"] == ["conv", "session1", "session:session-1"]
         content = json.loads(item["content"])
         assert len(content) == 1
@@ -1710,3 +1710,131 @@ class TestMultiplexBackgroundScope:
                 t.join(timeout=5)
         assert created == ["p1-secret"]
         assert "Daemon started successfully" in (home / "logs" / "hindsight-embed.log").read_text()
+
+    def test_default_profile_aliasing_preserves_other_agents_and_profiles(self, monkeypatch):
+        """Profile alias only maps 'default' to the alias; other profiles and agents stay intact."""
+        p = HindsightMemoryProvider()
+        monkeypatch.setattr("plugins.memory.hindsight._load_config", lambda: {"mode": "cloud", "profile_alias": "lynn"})
+
+        # Default profile gets aliased to lynn
+        p.initialize(session_id="s_default", agent_identity="default")
+        assert p._agent_identity == "lynn"
+        assert p._build_metadata(message_count=1, turn_index=0)["agent_identity"] == "lynn"
+
+        # Other profiles stay unchanged
+        p2 = HindsightMemoryProvider()
+        p2.initialize(session_id="s_coder", agent_identity="coder")
+        assert p2._agent_identity == "coder"
+        assert p2._build_metadata(message_count=1, turn_index=0)["agent_identity"] == "coder"
+
+        p3 = HindsightMemoryProvider()
+        p3.initialize(session_id="s_reviewer", agent_identity="reviewer")
+        assert p3._agent_identity == "reviewer"
+        assert p3._build_metadata(message_count=1, turn_index=0)["agent_identity"] == "reviewer"
+
+
+# ---------------------------------------------------------------------------
+# Agent identity → retain context attribution tests
+# ---------------------------------------------------------------------------
+
+
+class TestAgentIdentityRetainContext:
+    """PR: pass agent identity into the retain context field so Hindsight's
+    fact extraction attributes first-person statements to the correct agent
+    rather than a generic 'assistant'.
+
+    Hindsight's server-side `agent_name` parameter is deprecated; the
+    recommended path is to describe the speaker in the item `context` field.
+    """
+
+    def test_default_context_without_identity(self, provider):
+        """No agent_identity → the default generic context is used."""
+        provider._agent_identity = ""
+        ctx = provider._effective_retain_context()
+        assert ctx == "conversation between Hermes Agent and the User"
+
+    def test_default_identity_literal_not_templated(self, provider):
+        """agent_identity='default' is treated as no-identity (not personalised)."""
+        provider._agent_identity = "default"
+        ctx = provider._effective_retain_context()
+        assert ctx == "conversation between Hermes Agent and the User"
+
+    def test_named_identity_templates_context(self, provider):
+        """A real agent identity replaces the generic default with a personalised context."""
+        provider._agent_identity = "Lynn"
+        ctx = provider._effective_retain_context()
+        assert "Lynn" in ctx
+        assert "AI agent" in ctx
+        assert ctx == "conversation between Lynn (AI agent) and the User"
+
+    def test_custom_retain_context_wins_over_identity(self, provider):
+        """User-configured retain_context is never overwritten by identity templating."""
+        provider._agent_identity = "Lynn"
+        provider._retain_context = "custom project log"
+        ctx = provider._effective_retain_context()
+        assert ctx == "custom project log"
+
+    def test_explicit_context_wins_outright(self, provider):
+        """An explicit context (from a tool call arg) takes priority over everything."""
+        provider._agent_identity = "Lynn"
+        ctx = provider._effective_retain_context("user preference")
+        assert ctx == "user preference"
+
+    def test_sync_turn_uses_identity_context(self, provider_with_config):
+        """sync_turn's retain payload must carry the identity-enriched context."""
+        p = provider_with_config()
+        p.initialize(
+            session_id="test-session",
+            agent_identity="Lynn",
+        )
+        p._client = _make_mock_client()
+
+        p.sync_turn("hello", "hi there")
+        p._retain_queue.join()
+
+        p._client.aretain_batch.assert_called_once()
+        item = p._client.aretain_batch.call_args.kwargs["items"][0]
+        assert "Lynn" in item["context"]
+        assert "AI agent" in item["context"]
+
+    def test_tool_retain_uses_identity_context_when_no_explicit(self, provider):
+        """hindsight_retain tool call without explicit context gets identity context."""
+        provider._agent_identity = "Lynn"
+        result = json.loads(provider.handle_tool_call(
+            "hindsight_retain", {"content": "user likes dark mode"}
+        ))
+        assert result["result"] == "Memory stored successfully."
+        item = provider._client.aretain_batch.call_args.kwargs["items"][0]
+        assert "Lynn" in item["context"]
+
+    def test_tool_retain_explicit_context_wins(self, provider):
+        """hindsight_retain tool call with explicit context preserves it."""
+        provider._agent_identity = "Lynn"
+        result = json.loads(provider.handle_tool_call(
+            "hindsight_retain", {"content": "user likes dark mode", "context": "user preference"}
+        ))
+        assert result["result"] == "Memory stored successfully."
+        item = provider._client.aretain_batch.call_args.kwargs["items"][0]
+        assert item["context"] == "user preference"
+
+    def test_profile_alias_flows_into_retain_context(self, monkeypatch):
+        """End-to-end: profile_alias config → _agent_identity → retain context."""
+        p = HindsightMemoryProvider()
+        monkeypatch.setattr(
+            "plugins.memory.hindsight._load_config",
+            lambda: {"mode": "cloud", "profile_alias": "lynn"},
+        )
+        p.initialize(session_id="s1", agent_identity="default")
+        assert p._agent_identity == "lynn"
+        ctx = p._effective_retain_context()
+        assert "lynn" in ctx
+        assert "AI agent" in ctx
+
+    def test_backward_compat_no_agent_name_on_item(self, provider):
+        """The retain item must NOT carry an agent_name key — older servers
+        using strict validation would reject unknown fields."""
+        provider._agent_identity = "Lynn"
+        provider.sync_turn("hello", "hi")
+        provider._retain_queue.join()
+        item = provider._client.aretain_batch.call_args.kwargs["items"][0]
+        assert "agent_name" not in item
