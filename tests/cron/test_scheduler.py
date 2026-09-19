@@ -632,11 +632,11 @@ class TestRunJobSessionPersistence:
 
 
     def test_run_job_memory_enabled_in_cron(self, tmp_path):
-        """Cron agents get memory like any other agent run.
+        """Cron agents get built-in memory by default while suppressing external sync.
 
-        skip_memory=False and the memory toolset is not policy-denied, so
-        MEMORY.md/USER.md load and the memory tool follows normal toolset
-        resolution.
+        Default config sets cron.sync_memory=False, which passes skip_memory=True
+        to suppress external provider retain calls while ensuring "memory" is in
+        enabled_toolsets so MEMORY.md/USER.md still load.
         """
         job = {
             "id": "memory-enabled-job",
@@ -647,7 +647,8 @@ class TestRunJobSessionPersistence:
             run_job(job)
 
         kwargs = mock_agent_cls.call_args.kwargs
-        assert kwargs["skip_memory"] is False
+        assert kwargs["skip_memory"] is True
+        assert "memory" in (kwargs["enabled_toolsets"] or [])
         assert "memory" not in (kwargs["disabled_toolsets"] or []), (
             "memory toolset must not be policy-denied in cron"
         )
@@ -664,10 +665,36 @@ class TestRunJobSessionPersistence:
             run_job(job)
 
         kwargs = mock_agent_cls.call_args.kwargs
-        assert kwargs["skip_memory"] is False
+        assert kwargs["skip_memory"] is True
         assert "memory" in (kwargs["enabled_toolsets"] or [])
         assert "file" in (kwargs["enabled_toolsets"] or [])
         assert "memory" not in kwargs["disabled_toolsets"]
+
+    def test_run_job_external_memory_sync_opt_in(self, tmp_path, monkeypatch):
+        """cron.sync_memory: true or job sync_memory: true enables external memory sync."""
+        # Global config opt-in
+        job = {
+            "id": "memory-sync-global-job",
+            "name": "test",
+            "prompt": "hello",
+        }
+        from hermes_cli.config import load_config
+        with self._run_job_patches(tmp_path) as (fake_db, mock_agent_cls):
+            monkeypatch.setattr("cron.scheduler.load_config", lambda: {"cron": {"sync_memory": True}})
+            run_job(job)
+        assert mock_agent_cls.call_args.kwargs["skip_memory"] is False
+
+        # Per-job override opt-in
+        job_override = {
+            "id": "memory-sync-job-override",
+            "name": "test",
+            "prompt": "hello",
+            "sync_memory": True,
+        }
+        with self._run_job_patches(tmp_path) as (fake_db, mock_agent_cls):
+            monkeypatch.setattr("cron.scheduler.load_config", lambda: {"cron": {"sync_memory": False}})
+            run_job(job_override)
+        assert mock_agent_cls.call_args.kwargs["skip_memory"] is False
 
     def test_tick_skips_due_jobs_while_dispatch_is_paused(self, tmp_path):
         """The drain gate runs before advancing a due job's schedule."""

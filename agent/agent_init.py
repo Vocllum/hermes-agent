@@ -1234,8 +1234,8 @@ def _init_memory(agent, _agent_cfg, skip_memory, platform):
     # Flush/background agents can still pass enabled_toolsets=["memory"] so the built-in file store exists
     # and the memory tool does not fail with store=None (#65429). A toolset on disabled_toolsets is not a
     # request: a caller that denylists memory while its default toolset still names it must not get
-    # MEMORY.md loaded by an enabled-only check. (Cron agents now run with skip_memory=False and take the
-    # normal path here.)
+    # MEMORY.md loaded by an enabled-only check. (Cron agents load built-in MEMORY.md/USER.md while suppressing
+    # external memory providers by default via skip_memory=True unless cron.sync_memory is enabled.)
     _memory_toolset_requested = (
         "memory" in (agent.enabled_toolsets or [])
         and "memory" not in (agent.disabled_toolsets or [])
