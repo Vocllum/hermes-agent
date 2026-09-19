@@ -1596,7 +1596,15 @@ DEFAULT_CONFIG = {
     },
 
     "cron": {
-        # Let cron-spawned agents use the cronjob toolset (the "cron-librarian" pattern). Off by
+        # Sync completed cron turns to external memory providers (Hindsight, Mem0,
+        # Supermemory, etc.). False (default) = cron agents load built-in MEMORY.md/USER.md
+        # for context but do NOT push turns to external providers — prevents routine
+        # automation output from polluting user memory banks and consuming upstream LLM
+        # quota. True = external providers run sync_turn() on every cron turn (same as
+        # gateway/CLI agents). Per-job override: set sync_memory on the job record.
+        "sync_memory": False,
+
+        # Let cron-spawned agents use the cronjob toolset (the "cron-librarian" pattern)...
         # default: policy-denied in cron context to prevent unattended scheduling loops. Jobs
         # created this way are user-owned in the same flat jobs table. Interactive toolsets
         # (messaging/clarify) stay denied in cron regardless.

@@ -2229,6 +2229,29 @@ def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _Cro
 def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup, *, workdir, session_id, session_db):
     runtime = setup.runtime
     pr = _cfg.get("provider_routing") or {}
+
+    # External memory provider sync isolation: cron.sync_memory controls whether
+    # external providers (Hindsight, Mem0, Supermemory) run sync_turn() on cron turns.
+    # Per-job sync_memory overrides the global setting. When sync is suppressed
+    # (skip_memory=True), the built-in MEMORY.md/USER.md store still loads via the
+    # _memory_toolset_requested path in agent_init._init_memory — we ensure "memory"
+    # is in enabled_toolsets for that.
+    _cron_cfg = (_cfg.get("cron") or {}) if isinstance(_cfg, dict) else {}
+    _sync_memory_global = bool(_cron_cfg.get("sync_memory", False))
+    _job_sync = job.get("sync_memory")
+    _sync_memory = _job_sync if isinstance(_job_sync, bool) else _sync_memory_global
+    _skip_memory = not _sync_memory
+
+    _enabled_toolsets = _resolve_cron_enabled_toolsets(job, _cfg)
+    if _skip_memory:
+        if _enabled_toolsets is not None:
+            if "memory" not in _enabled_toolsets:
+                _enabled_toolsets = list(_enabled_toolsets) + ["memory"]
+        else:
+            # Can't guarantee built-in memory loads with enabled_toolsets=None;
+            # fall back to allowing external providers rather than breaking toolsets.
+            _skip_memory = False
+
     return AIAgent(
         model=setup.model,
         api_key=runtime.get("api_key"),
@@ -2249,13 +2272,13 @@ def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup
         providers_order=pr.get("order"),
         provider_sort=pr.get("sort"),
         openrouter_min_coding_score=(_cfg.get("openrouter") or {}).get("min_coding_score"),
-        enabled_toolsets=_resolve_cron_enabled_toolsets(job, _cfg),
+        enabled_toolsets=_enabled_toolsets,
         disabled_toolsets=_resolve_cron_disabled_toolsets(_cfg),
         quiet_mode=True,
         # Project context files only with a configured workdir; SOUL.md always.
         skip_context_files=not bool(workdir),
         load_soul_identity=True,
-        skip_memory=False,
+        skip_memory=_skip_memory,
         skip_background_review=True,  # Cron has no human-in-the-loop need for skill/memory review forks (~30K tok/event)
         platform="cron",
         session_id=session_id,
